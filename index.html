@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>UrbanRide 3D</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; touch-action: none; font-family: sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        
+        .btn {
+            pointer-events: auto; background: rgba(0, 0, 0, 0.6); color: white; border: 2px solid white;
+            padding: 8px 12px; border-radius: 8px; font-weight: bold; margin: 5px; cursor: pointer;
+            text-transform: uppercase; font-size: 11px; backdrop-filter: blur(4px);
+        }
+        .btn:active { background: white; color: black; }
+        
+        #top-bar { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; flex-wrap: wrap; gap: 5px; }
+        
+        #joystick-zone { position: absolute; bottom: 30px; left: 30px; width: 120px; height: 120px; background: rgba(255,255,255,0.2); border-radius: 50%; pointer-events: auto; }
+        #joystick-knob { position: absolute; top: 40px; left: 40px; width: 40px; height: 40px; background: white; border-radius: 50%; transform: translate(0px, 0px); }
+        
+        #action-zone { position: absolute; bottom: 30px; right: 30px; display: flex; flex-direction: column; gap: 15px; pointer-events: auto; }
+        
+        .action-btn { width: 60px; height: 60px; border-radius: 50%; background: rgba(255,50,50,0.7); color: white; border: 2px solid white; font-weight: bold; font-size: 10px; }
+        .action-btn.police { background: rgba(50,50,255,0.7); }
+        
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; background: rgba(0,0,0,0.8); padding: 20px; border-radius: 10px; display: none; pointer-events: none; text-align: center;}
+    </style>
+    <!-- Importation de Three.js et GLTFLoader -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    
+    <div id="ui-layer">
+        <div id="top-bar">
+            <!-- Boutons de véhicules programmés pour charger tes modèles 3D (.glb) -->
+            <button class="btn" onclick="spawnVehicle('Audi_RS3.glb')">RS3</button>
+            <button class="btn" onclick="spawnVehicle('Golf_8R.glb')">Golf 8R</button>
+            <button class="btn" onclick="spawnVehicle('C63_AMG.glb')">C63 AMG</button>
+            <button class="btn" onclick="spawnVehicle('Surron.glb')">Surron</button>
+            <button class="btn" onclick="spawnVehicle('Kawasaki_85KX.glb')">85KX</button>
+            <button class="btn" onclick="toggleTime()">Jour/Nuit</button>
+        </div>
+        
+        <div id="joystick-zone"><div id="joystick-knob"></div></div>
+        
+        <div id="action-zone">
+            <button class="action-btn" onclick="spawnFire()">🔥 FEU</button>
+            <button class="action-btn" onclick="spawnNPC()">🚶 PNJ</button>
+            <button class="action-btn police" onclick="callPolice()">🚓 POLICE</button>
+        </div>
+        
+        <div id="loading">Chargement...</div>
+    </div>
+
+    <script>
+        // --- 1. INITIALISATION MOTEUR 3D ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x87CEEB, 0.015);
+        
+        // Caméra configurée pour ne pas faire de saltos
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 5); // Hauteur des yeux
+        camera.rotation.order = "YXZ";
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const gltfLoader = new THREE.GLTFLoader();
+
+        // --- 2. LUMIÈRES & ENVIRONNEMENT ---
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+        scene.add(hemiLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(50, 100, 50);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // Sol du quartier (Asphalte)
+        const groundGeo = new THREE.PlaneGeometry(500, 500);
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Génération d'un quartier de base (Bâtiments)
+        const buildingMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.9 });
+        for(let i=0; i<40; i++) {
+            const h = Math.random() * 20 + 10;
+            const geo = new THREE.BoxGeometry(10, h, 10);
+            const building = new THREE.Mesh(geo, buildingMat);
+            building.position.set((Math.random() - 0.5) * 200, h/2, (Math.random() - 0.5) * 200);
+            if(building.position.length() > 25) { // Laisser le centre vide
+                building.castShadow = true;
+                building.receiveShadow = true;
+                scene.add(building);
+            }
+        }
+
+        // --- 3. CHARGEMENT DES VRAIS VÉHICULES ---
+        const vehicles = [];
+        function spawnVehicle(filename) {
+            const loadingUI = document.getElementById('loading');
+            loadingUI.style.display = 'block';
+            loadingUI.innerHTML = "Chargement de " + filename + "...";
+            
+            gltfLoader.load(filename, function(gltf) {
+                const car = gltf.scene;
+                // Apparition juste devant le joueur
+                const direction = new THREE.Vector3();
+                camera.getWorldDirection(direction);
+                car.position.copy(camera.position).addScaledVector(direction, 5);
+                car.position.y = 0;
+                
+                car.traverse(function(child) { if (child.isMesh) child.castShadow = true; });
+                scene.add(car);
+                vehicles.push(car);
+                loadingUI.style.display = 'none';
+            }, undefined, function(error) {
+                // Modèle de remplacement si le fichier n'est pas encore sur GitHub
+                const fallbackGeo = new THREE.BoxGeometry(2, 1, 4);
+                const fallbackMat = new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff });
+                const fallbackCar = new THREE.Mesh(fallbackGeo, fallbackMat);
+                const direction = new THREE.Vector3();
+                camera.getWorldDirection(direction);
+                fallbackCar.position.copy(camera.position).addScaledVector(direction, 5);
+                fallbackCar.position.y = 0.5;
+                
+                fallbackCar.castShadow = true;
+                scene.add(fallbackCar);
+                vehicles.push(fallbackCar);
+                
+                loadingUI.innerHTML = "Fichier " + filename + " non trouvé.<br>Modèle 3D de remplacement généré.";
+                setTimeout(() => loadingUI.style.display = 'none', 3000);
+            });
+        }
+
+        // --- 4. SYSTÈME DE FEU (PARTICULES) ---
+        const fireParticles = [];
+        function spawnFire() {
+            const particleCount = 100;
+            const fireGeo = new THREE.BufferGeometry();
+            const firePos = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount * 3; i++) firePos[i] = (Math.random() - 0.5) * 2;
+            fireGeo.setAttribute('position', new THREE.BufferAttribute(firePos, 3));
+            
+            const fireMat = new THREE.PointsMaterial({
+                color: 0xff5500, size: 0.8, transparent: true, opacity: 0.8,
+                blending: THREE.AdditiveBlending, depthWrite: false
+            });
+            
+            const fireSystem = new THREE.Points(fireGeo, fireMat);
+            const direction = new THREE.Vector3();
+            camera.getWorldDirection(direction);
+            fireSystem.position.copy(camera.position).addScaledVector(direction, 3);
+            fireSystem.position.y = 0;
+            
+            scene.add(fireSystem);
+            fireParticles.push(fireSystem);
+        }
+
+        // --- 5. PNJ & POLICE ---
+        const npcs = [];
+        function spawnNPC() {
+            const npcGeo = new THREE.CylinderGeometry(0.5, 0.5, 1.8, 8);
+            const npcMat = new THREE.MeshStandardMaterial({ color: 0xffccaa });
+            const npc = new THREE.Mesh(npcGeo, npcMat);
+            
+            const direction = new THREE.Vector3();
+            camera.getWorldDirection(direction);
+            npc.position.copy(camera.position).addScaledVector(direction, 4);
+            npc.position.y = 0.9;
+            
+            npc.castShadow = true;
+            scene.add(npc);
+            npcs.push(npc);
+        }
+
+        function callPolice() {
+            document.body.style.animation = "policeFlash 0.5s infinite";
+            setTimeout(() => document.body.style.animation = "", 4000);
+            scene.fog.color.setHex(0xaaaaaa); // Effet fumée blanche lacrymo
+            scene.fog.density = 0.1; 
+        }
+
+        // --- CYCLE JOUR / NUIT ---
+        let isNight = false;
+        function toggleTime() {
+            isNight = !isNight;
+            if(isNight) {
+                scene.background = new THREE.Color(0x050510);
+                scene.fog.color.setHex(0x050510);
+                dirLight.intensity = 0.1;
+                hemiLight.intensity = 0.2;
+            } else {
+                scene.background = new THREE.Color(0x87CEEB);
+                scene.fog.color.setHex(0x87CEEB);
+                dirLight.intensity = 0.8;
+                hemiLight.intensity = 0.6;
+                scene.fog.density = 0.015;
+            }
+        }
+
+        // --- 6. GESTION DU JOYSTICK TACTILE ---
+        let moveForward = 0;
+        let moveRight = 0;
+        const joystickZone = document.getElementById('joystick-zone');
+        const joystickKnob = document.getElementById('joystick-knob');
+        
+        joystickZone.addEventListener('touchstart', handleJoystick, {passive: false});
+        joystickZone.addEventListener('touchmove', handleJoystick, {passive: false});
+        joystickZone.addEventListener('touchend', resetJoystick);
+
+        function handleJoystick(e) {
+            e.preventDefault();
+            const touch = e.targetTouches[0];
+            const rect = joystickZone.getBoundingClientRect();
+            let x = touch.clientX - rect.left - 60;
+            let y = touch.clientY - rect.top - 60;
+            
+            const distance = Math.sqrt(x*x + y*y);
+            if (distance > 30) {
+                x = (x / distance) * 30;
+                y = (y / distance) * 30;
+            }
+            
+            joystickKnob.style.transform = `translate(${x}px, ${y}px)`;
+            moveForward = -y / 30;
+            moveRight = x / 30;
+        }
+
+        function resetJoystick() {
+            joystickKnob.style.transform = "translate(0px, 0px)";
+            moveForward = 0;
+            moveRight = 0;
+        }
+
+        // --- 7. GESTION DE LA CAMÉRA TACTILE (GLISSER) ---
+        let isDragging = false;
+        let previousTouch = { x: 0, y: 0 };
+        let cameraRotation = { yaw: 0, pitch: 0 };
+
+        document.getElementById('canvas-container').addEventListener('touchstart', (e) => {
+            isDragging = true;
+            previousTouch.x = e.touches[0].clientX;
+            previousTouch.y = e.touches[0].clientY;
+        }, {passive: false});
+
+        document.getElementById('canvas-container').addEventListener('touchmove', (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            const touch = e.touches[0];
+            const deltaX = touch.clientX - previousTouch.x;
+            const deltaY = touch.clientY - previousTouch.y;
+
+            cameraRotation.yaw -= deltaX * 0.006;
+            cameraRotation.pitch -= deltaY * 0.006;
+            
+            cameraRotation.pitch = Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, cameraRotation.pitch));
+
+            camera.rotation.y = cameraRotation.yaw;
+            camera.rotation.x = cameraRotation.pitch;
+
+            previousTouch.x = touch.clientX;
+            previousTouch.y = touch.clientY;
+        }, {passive: false});
+
+        document.getElementById('canvas-container').addEventListener('touchend', () => {
+            isDragging = false;
+        });
+
+        // --- 8. BOUCLE D'ANIMATION ET PHYSIQUE ---
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Animation des flammes
+            fireParticles.forEach(fire => {
+                const positions = fire.geometry.attributes.position.array;
+                for(let i=1; i<positions.length; i+=3) {
+                    positions[i] += 0.05; // monte
+                    if(positions[i] > 4) positions[i] = 0;
+                }
+                fire.geometry.attributes.position.needsUpdate = true;
+            });
+
+            // Animation des PNJs
+            npcs.forEach(npc => {
+                npc.position.x += (Math.random() - 0.5) * 0.05;
+                npc.position.z += (Math.random() - 0.5) * 0.05;
+            });
+
+            // Déplacement fluide du joueur (Joystick)
+            if(moveForward !== 0 || moveRight !== 0) {
+                const moveSpeed = 0.2;
+                const direction = new THREE.Vector3();
+                camera.getWorldDirection(direction);
+                direction.y = 0;
+                direction.normalize();
+
+                const right = new THREE.Vector3();
+                right.crossVectors(camera.up, direction).normalize();
+
+                camera.position.addScaledVector(direction, moveForward * moveSpeed);
+                camera.position.addScaledVector(right, moveRight * moveSpeed);
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Style pour l'effet gyrophare police
+        const style = document.createElement('style');
+        style.innerHTML = `@keyframes policeFlash { 0% { box-shadow: inset 0 0 50px blue; } 50% { box-shadow: inset 0 0 50px red; } 100% { box-shadow: inset 0 0 50px blue; } }`;
+        document.head.appendChild(style);
+        
+        // Redimension de l'écran
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
